@@ -1,3 +1,5 @@
+
+# domain classifier使用均值池化分类
 import torch
 import torch.nn as nn
 import torch.utils.model_zoo as model_zoo
@@ -176,8 +178,8 @@ class netD(nn.Module):
 		self.bn1 = nn.BatchNorm2d(64)
 		self.conv2 = conv1x1(64, 128, 2)
 		self.bn2 = nn.BatchNorm2d(128)
-		self.conv3 = conv3x3(128, 128, 2)
-		self.bn3 = nn.BatchNorm2d(128)
+		# self.conv3 = conv3x3(128, 128, 2)
+		# self.bn3 = nn.BatchNorm2d(128)
 		self.fc = nn.Linear(128, 2)
 		self.context = context
 		self.leaky_relu = nn.LeakyReLU(negative_slope=0.2, inplace=True)
@@ -186,7 +188,7 @@ class netD(nn.Module):
 		x = F.dropout(F.relu(self.bn1(self.conv1(x))), training=self.training)
 
 		x = F.dropout(F.relu(self.bn2(self.conv2(x))), training=self.training)
-		x = F.dropout(F.relu(self.bn3(self.conv3(x))), training=self.training)
+		# x = F.dropout(F.relu(self.bn3(self.conv3(x))), training=self.training)
 		x = F.avg_pool2d(x, (x.size(2), x.size(3)))
 		x = x.view(-1, 128)
 		if self.context:
@@ -242,7 +244,12 @@ class EAST(nn.Module):
 
 if __name__ == '__main__':
 	m = EAST()
-	print(m)
-	# x = torch.randn(1, 3, 256, 256)
-	# score, geo = m(x, x)
+	# print(m)
+	x = torch.randn(1, 3, 256, 256)
+	score, geo , cls= m(x)
+
+	print('score size:', score.size())
+	print('geo size:', geo.size())
+	print('cls size:', cls.size())
+
 

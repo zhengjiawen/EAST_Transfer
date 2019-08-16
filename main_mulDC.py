@@ -1,13 +1,14 @@
+# 加多个域分类器到合并层
 import torch
 import sys
 from torch.utils import data
 from torch import nn
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
-from dataset.dataset import custom_dataset, valid_dataset
+from dataset.dataset import custom_dataset, valid_dataset, IC13_dataset
 # from model_resnet import EAST  # resnet
-from models.model import EAST #vgg16
-from loss import Loss
+from models.model_mulDC import EAST #vgg16
+from loss import Loss, DiceLoss
 from utils.logger_util import Logger
 from utils.utils import AverageMeter, get_learning_rate
 import os
@@ -57,6 +58,15 @@ log.open(os.path.join(log_folder, 'log_train.txt'), mode='a')
 log.write("\n----------------------------------------------- [START %s] %s\n\n" % (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), '-' * 51))
 
 
+m = torch.nn.Sigmoid().to(device)
+
+def compute_doamin_loss(pred, loss_domain, flag='source'):
+    if flag == 'source':
+        domain_label = Variable(torch.zeros(pred.size()).float().cuda())
+    else:
+        domain_label = Variable(torch.ones(pred.size()).float().cuda())
+
+    return loss_domain(m(pred), domain_label)
 
 
 def train(source_train_loader, target_train_loader, model, criterion, loss_domain, optimizer, epoch):
@@ -64,6 +74,12 @@ def train(source_train_loader, target_train_loader, model, criterion, loss_domai
     east_total_loss = AverageMeter()
     source_domain_loss = AverageMeter()
     target_domain_loss = AverageMeter()
+    source_domain_loss_1 = AverageMeter()
+    target_domain_loss_1 = AverageMeter()
+    source_domain_loss_2 = AverageMeter()
+    target_domain_loss_2 = AverageMeter()
+    source_domain_loss_3 = AverageMeter()
+    target_domain_loss_3 = AverageMeter()
 
     model.train()
     epoch_time = time.time()
@@ -86,16 +102,23 @@ def train(source_train_loader, target_train_loader, model, criterion, loss_domai
         pred_score, pred_geo, pred_cls = model(s_img, False)
 
         # source label
-        domain_s = Variable(torch.zeros(pred_cls.size(0)).long().cuda())
-        loss_domain_s = loss_domain(pred_cls, domain_s)
+        loss_domain_s_1 = compute_doamin_loss(pred_cls[0], loss_domain, 'source')
+        loss_domain_s_2 = compute_doamin_loss(pred_cls[1], loss_domain, 'source')
+        loss_domain_s_3 = compute_doamin_loss(pred_cls[2], loss_domain, 'source')
+
 
         target_cls = model(t_img, True)
         # target label
-        domain_t = Variable(torch.ones(pred_cls.size(0)).long().cuda())
-        loss_domain_t = loss_domain(target_cls, domain_t)
+        loss_domain_t_1 = compute_doamin_loss(target_cls[0],loss_domain,'target')
+        loss_domain_t_2 = compute_doamin_loss(target_cls[1],loss_domain, 'target')
+        loss_domain_t_3 = compute_doamin_loss(target_cls[2],loss_domain, 'target')
+
+        loss_domain_s = loss_domain_s_1+loss_domain_s_2+loss_domain_s_3
+        loss_domain_t = loss_domain_t_1+loss_domain_t_2+loss_domain_t_3
 
         east_loss = criterion(s_gt_score, pred_score, s_gt_geo, pred_geo, s_ignored_map)
         loss = east_loss + 0.1*loss_domain_s + 0.1*loss_domain_t
+
 
         optimizer.zero_grad()
         loss.backward()
@@ -105,7 +128,13 @@ def train(source_train_loader, target_train_loader, model, criterion, loss_domai
         epoch_loss.update(loss.item(), s_img.size(0))
         east_total_loss.update(east_loss.item(), s_img.size(0))
         source_domain_loss.update(loss_domain_s.item(), s_img.size(0))
-        target_domain_loss.update(loss_domain_t, s_img.size(0))
+        target_domain_loss.update(loss_domain_t.item(), s_img.size(0))
+        source_domain_loss_1.update(loss_domain_s_1.item(), s_img.size(0))
+        target_domain_loss_1.update(loss_domain_t_1.item(), s_img.size(0))
+        source_domain_loss_2.update(loss_domain_s_2.item(), s_img.size(0))
+        target_domain_loss_2.update(loss_domain_t_2.item(), s_img.size(0))
+        source_domain_loss_3.update(loss_domain_s_3.item(), s_img.size(0))
+        target_domain_loss_3.update(loss_domain_t_3.item(), s_img.size(0))
 
 
         # output tensorboardX
@@ -113,6 +142,12 @@ def train(source_train_loader, target_train_loader, model, criterion, loss_domai
         writer.add_scalar('iter/detection_loss', east_total_loss.val, epoch*int(len(source_train_loader))+i)
         writer.add_scalar('iter/source_domain_loss', source_domain_loss.val, epoch*int(len(source_train_loader))+i)
         writer.add_scalar('iter/target_domain_loss', target_domain_loss.val, epoch*int(len(source_train_loader))+i)
+        writer.add_scalar('iter/source_domain_loss_1', source_domain_loss_1.val, epoch*int(len(source_train_loader))+i)
+        writer.add_scalar('iter/target_domain_loss_1', target_domain_loss_1.val, epoch*int(len(source_train_loader))+i)
+        writer.add_scalar('iter/source_domain_loss_2', source_domain_loss_2.val, epoch*int(len(source_train_loader))+i)
+        writer.add_scalar('iter/target_domain_loss_2', target_domain_loss_2.val, epoch*int(len(source_train_loader))+i)
+        writer.add_scalar('iter/source_domain_loss_3', source_domain_loss_3.val, epoch*int(len(source_train_loader))+i)
+        writer.add_scalar('iter/target_domain_loss_3', target_domain_loss_3.val, epoch*int(len(source_train_loader))+i)
 
 
 
@@ -125,10 +160,17 @@ def train(source_train_loader, target_train_loader, model, criterion, loss_domai
     writer.add_scalar('epoch/detection_loss', east_total_loss.avg, epoch)
     writer.add_scalar('epoch/source_domain_loss', source_domain_loss.avg, epoch)
     writer.add_scalar('epoch/target_domain_loss', target_domain_loss.avg, epoch)
+    writer.add_scalar('epoch/source_domain_loss_1', source_domain_loss_1.avg, epoch)
+    writer.add_scalar('epoch/target_domain_loss_1', target_domain_loss_1.avg, epoch)
+    writer.add_scalar('epoch/source_domain_loss_2', source_domain_loss_2.avg, epoch)
+    writer.add_scalar('epoch/target_domain_loss_2', target_domain_loss_2.avg, epoch)
+    writer.add_scalar('epoch/source_domain_loss_3', source_domain_loss_3.avg, epoch)
+    writer.add_scalar('epoch/target_domain_loss_3', target_domain_loss_3.avg, epoch)
 
     log.write('Epoch[{}], Train, epoch_loss is {:.8f}, epoch_time is {:.8f}'.format(epoch, epoch_loss.avg,
                                                                             time.time() - epoch_time))
     log.write("\n")
+    return epoch_loss.avg
 
 
 def eval(model, val_dataloader, criterion, loss_domain, epoch):
@@ -136,6 +178,10 @@ def eval(model, val_dataloader, criterion, loss_domain, epoch):
     epoch_loss = AverageMeter()
     detection_total_loss = AverageMeter()
     val_domain_loss = AverageMeter()
+    val_domain_loss_1 = AverageMeter()
+    val_domain_loss_2 = AverageMeter()
+    val_domain_loss_3 = AverageMeter()
+
 
     epoch_time = time.time()
     log.write('start eval')
@@ -149,9 +195,10 @@ def eval(model, val_dataloader, criterion, loss_domain, epoch):
             east_loss = criterion(gt_score, pred_score, gt_geo, pred_geo, ignored_map)
 
             # domain label
-            domain_t = Variable(torch.ones(pred_cls.size(0)).long().cuda())
-            loss_domain_t = loss_domain(pred_cls, domain_t)
-
+            loss_domain_t_1 = compute_doamin_loss(pred_cls[0], loss_domain,'target')
+            loss_domain_t_2 = compute_doamin_loss(pred_cls[1], loss_domain,'target')
+            loss_domain_t_3 = compute_doamin_loss(pred_cls[2],loss_domain, 'target')
+            loss_domain_t = loss_domain_t_1+loss_domain_t_2+loss_domain_t_3
 
             loss = east_loss+0.1*loss_domain_t
 
@@ -159,6 +206,10 @@ def eval(model, val_dataloader, criterion, loss_domain, epoch):
             epoch_loss.update(loss.item(), img.size(0))
             detection_total_loss.update(east_loss.item(), img.size(0))
             val_domain_loss.update(loss_domain_t.item(), img.size(0))
+            val_domain_loss_1.update(loss_domain_t_1.item(), img.size(0))
+            val_domain_loss_2.update(loss_domain_t_2.item(), img.size(0))
+            val_domain_loss_3.update(loss_domain_t_3.item(), img.size(0))
+
 
             log.write('Epoch[{}], Eval, mini-batch is [{}/{}], time consumption is {:.8f}, batch_loss is {:.8f}'.format( \
                      epoch, i + 1, int(len(val_dataloader)), time.time() - start_time, loss.item()), is_terminal=0)
@@ -168,6 +219,10 @@ def eval(model, val_dataloader, criterion, loss_domain, epoch):
     writer.add_scalar('eval/total_loss', epoch_loss.avg, epoch)
     writer.add_scalar('eval/detection_loss', detection_total_loss.avg, epoch)
     writer.add_scalar('eval/domain_loss', val_domain_loss.avg, epoch)
+    writer.add_scalar('eval/domain_loss_1', val_domain_loss_1.avg, epoch)
+    writer.add_scalar('eval/domain_loss_2', val_domain_loss_2.avg, epoch)
+    writer.add_scalar('eval/domain_loss_3', val_domain_loss_3.avg, epoch)
+
 
     log.write( 'Epoch[{}], Eval, epoch_loss is {:.8f}, detection_loss is {:.8f}, epoch_time is {:.8f}'.format(epoch, epoch_loss.avg, detection_total_loss.avg, time.time() - epoch_time))
     log.write('\n')
@@ -177,8 +232,9 @@ def eval(model, val_dataloader, criterion, loss_domain, epoch):
 
 def main(args):
     source_train_set = custom_dataset(args.train_data_path, args.train_gt_path)
-    target_train_set = custom_dataset(args.target_data_path, args.target_gt_path)
-    valid_train_set = valid_dataset(args.val_data_path, args.val_gt_path)
+    # target_train_set = custom_dataset(args.target_data_path, args.target_gt_path)
+    target_train_set = IC13_dataset(args.target_data_path, args.target_gt_path)
+    valid_train_set = valid_dataset(args.val_data_path, args.val_gt_path, data_flag='ic13')
 
     source_train_loader = data.DataLoader(source_train_set, batch_size=args.batch_size,
                                           shuffle=True, num_workers=args.num_workers, drop_last=True)
@@ -189,8 +245,8 @@ def main(args):
 
     criterion = Loss().to(device)
     # domain loss
-    loss_domain = torch.nn.CrossEntropyLoss().to(device)
-
+    # loss_domain = torch.nn.CrossEntropyLoss().to(device)
+    loss_domain = torch.nn.BCELoss().to(device)
     best_loss = 1000
     best_num = 0
 
@@ -214,8 +270,8 @@ def main(args):
 
     total_epoch = args.epochs
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    # scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[total_epoch // 3, total_epoch * 2 // 3], gamma=0.1)
-    scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=6, threshold=args.lr/100)
+    scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[total_epoch // 3, total_epoch * 2 // 3], gamma=0.1)
+    # scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=12, threshold=args.lr/100)
     current_epoch_num = 0
 
     # resume
@@ -226,14 +282,14 @@ def main(args):
 
     for epoch in range(current_epoch_num, total_epoch):
         each_epoch_start = time.time()
-        # scheduler.step(epoch)
+        scheduler.step(epoch)
         # add lr in tensorboardX
         writer.add_scalar('epoch/lr',get_learning_rate(optimizer) ,epoch)
 
-        train(source_train_loader, target_train_loader, model, criterion, loss_domain, optimizer, epoch)
+        train_loss = train(source_train_loader, target_train_loader, model, criterion, loss_domain, optimizer, epoch)
 
         val_loss = eval(model,  valid_loader, criterion, loss_domain, epoch)
-        scheduler.step(val_loss)
+        # scheduler.step(train_loss)
 
         if val_loss < best_loss:
             best_num = epoch + 1

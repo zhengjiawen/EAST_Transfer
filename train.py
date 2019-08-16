@@ -4,7 +4,7 @@ from torch.utils import data
 from torch import nn
 from torch.optim import lr_scheduler
 from dataset import custom_dataset
-from model import EAST
+from models.model import EAST
 from loss import Loss
 import os
 import time

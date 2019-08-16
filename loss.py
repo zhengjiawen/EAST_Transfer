@@ -41,4 +41,11 @@ class Loss(nn.Module):
         geo_loss = self.weight_angle * angle_loss + iou_loss
         # print('classify loss is {:.8f}, angle loss is {:.8f}, iou loss is {:.8f}'.format(classify_loss, angle_loss,
         #                                                                                  iou_loss))
-        return classify_loss, geo_loss
+        return classify_loss + geo_loss
+
+class DiceLoss(nn.Module):
+    def __init__(self):
+        super(DiceLoss, self).__init__()
+
+    def forward(self, gt_score, pred_score):
+        return get_dice_loss(gt_score, pred_score)

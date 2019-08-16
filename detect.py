@@ -1,9 +1,9 @@
 import torch
 from torchvision import transforms
 from PIL import Image, ImageDraw
-from model import EAST
+from models.model import EAST
 import os
-from dataset import get_rotate_mat
+from dataset.dataset import get_rotate_mat
 import numpy as np
 import lanms
 
@@ -22,6 +22,33 @@ def resize_img(img):
     ratio_w = resize_w / w
 
     return img, ratio_h, ratio_w
+
+
+def validate_clockwise_points(points):
+    """
+    Validates that the points that the 4 points that dlimite a polygon are in clockwise order.
+    """
+
+    if len(points) != 8:
+        raise Exception("Points list not valid." + str(len(points)))
+
+    point = [
+        [int(points[0]), int(points[1])],
+        [int(points[2]), int(points[3])],
+        [int(points[4]), int(points[5])],
+        [int(points[6]), int(points[7])]
+    ]
+    edge = [
+        (point[1][0] - point[0][0]) * (point[1][1] + point[0][1]),
+        (point[2][0] - point[1][0]) * (point[2][1] + point[1][1]),
+        (point[3][0] - point[2][0]) * (point[3][1] + point[2][1]),
+        (point[0][0] - point[3][0]) * (point[0][1] + point[3][1])
+    ]
+
+    summatory = edge[0] + edge[1] + edge[2] + edge[3];
+    if summatory > 0:
+        raise Exception(
+            "Points are not clockwise. The coordinates of bounding quadrilaterals have to be given in clockwise order. Regarding the correct interpretation of 'clockwise' remember that the image coordinate system used is the standard one, with the image origin at the upper left, the X axis extending to the right and Y axis extending downwards.")
 
 
 def load_pil(img):
@@ -142,7 +169,9 @@ def detect(img, model, device):
     '''
     img, ratio_h, ratio_w = resize_img(img)
     with torch.no_grad():
-        score, geo= model(load_pil(img).to(device))
+        result = model(load_pil(img).to(device))
+        score = result[0]
+        geo = result[1]
     boxes = get_boxes(score.squeeze(0).cpu().numpy(), geo.squeeze(0).cpu().numpy())
     return adjust_ratio(boxes, ratio_w, ratio_h)
 
@@ -175,22 +204,54 @@ def detect_dataset(model, device, test_img_path, submit_path):
         boxes = detect(Image.open(img_file), model, device)
         seq = []
         if boxes is not None:
-            seq.extend([','.join([str(int(b)) for b in box[:-1]]) + '\n' for box in boxes])
+            for box in boxes:
+                try:
+                    validate_clockwise_points(box[:-1])
+                except Exception:
+                    print(box[:-1])
+                    continue
+                seq.extend([','.join([str(int(b)) for b in box[:-1]]) + '\n' ])
         with open(os.path.join(submit_path, 'res_' + os.path.basename(img_file).replace('.jpg', '.txt')), 'w') as f:
             f.writelines(seq)
 
+def detect_IC13(model, device, test_img_path, submit_path):
+    '''detection on whole dataset, save .txt results in submit_path
+    Input:
+        model        : detection model
+        device       : gpu if gpu is available
+        test_img_path: dataset path
+        submit_path  : submit result for evaluation
+    '''
+    img_files = os.listdir(test_img_path)
+    img_files = sorted([os.path.join(test_img_path, img_file) for img_file in img_files])
+
+    for i, img_file in enumerate(img_files):
+        print('evaluating {} image'.format(i), end='\r')
+        boxes = detect(Image.open(img_file), model, device)
+        seq = []
+        if boxes is not None:
+            seq.extend([','.join([str(int(b)) for b in [box[0], box[1], box[4], box[5]]]) + '\n' for box in boxes])
+        with open(os.path.join(submit_path, 'res_' + os.path.basename(img_file).replace('.jpg', '.txt')), 'w') as f:
+            f.writelines(seq)
 
 if __name__ == '__main__':
-    img_path = '../ICDAR_2015/test_img/img_2.jpg'
-    model_path = './pths/model_epoch_900.pth'
+    img_path = '/youedata/dengjinhong/zjw/dataset/icdar2013/Challenge2_Test_Task12_Images/img_1.jpg'
+    model_path = '/youedata/dengjinhong/zjw/code/EAST_Tansfer/checkpoint/baseline_k1_rlop_2/model_epoch_best.pth'
     res_img = './res.bmp'
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = EAST().to(device)
-    model.load_state_dict(torch.load(model_path))
+    checkpoint = torch.load(model_path)
+    model.load_state_dict(checkpoint['state_dict'])
     model.eval()
     img = Image.open(img_path)
 
     boxes = detect(img, model, device)
+    seq = []
+
+    if boxes is not None:
+        seq.extend([','.join([str(int(b)) for b in [box[0], box[1], box[4], box[5]]]) + '\n' for box in boxes])
+
+    print(boxes)
     plot_img = plot_boxes(img, boxes)
     plot_img.save(res_img)
 

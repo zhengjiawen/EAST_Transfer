@@ -1,3 +1,4 @@
+# eval ICDAR2013
 import time
 import torch
 import subprocess
@@ -14,26 +15,27 @@ def eval_model(model_name, test_img_path, submit_path, save_flag=True):
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = EAST(False).to(device)
+
     model.load_state_dict(torch.load(model_name))
     model.eval()
 
     start_time = time.time()
     detect_dataset(model, device, test_img_path, submit_path)
     os.chdir(submit_path)
-    res = subprocess.getoutput('zip -q submit.zip *.txt')
-    res = subprocess.getoutput('mv submit.zip ../')
+    res = subprocess.getoutput('zip -q submit13.zip *.txt')
+    res = subprocess.getoutput('mv submit13.zip ../')
     os.chdir('../')
-    res = subprocess.getoutput('python ./evaluate/script.py –g=./evaluate/gt.zip –s=./submit.zip')
+    res = subprocess.getoutput('python ./evaluate/script.py –g=./evaluate/gt13.zip –s=./submit13.zip')
     print(res)
-    os.remove('./submit.zip')
-    print('eval time is {}'.format(time.time() - start_time))
+    os.remove('./submit13.zip')
+    print('eval time is {}'.format(time.time()-start_time))
 
     if not save_flag:
         shutil.rmtree(submit_path)
 
 
 if __name__ == '__main__':
-    model_name = '/youedata/dengjinhong/zjw/code/EAST_Tansfer/checkpoint/ic17_nor/model_epoch_best.pth'
-    test_img_path = '/youedata/dengjinhong/zjw/dataset/icdar2015/ch4_test_images/'
-    submit_path = './submit'
+    model_name = '/youedata/dengjinhong/zjw/code/EAST_Tansfer/pths/east_vgg16.pth'
+    test_img_path = '/youedata/dengjinhong/zjw/dataset/icdar2013/Challenge2_Test_Task12_Images/'
+    submit_path = './submit_ic13'
     eval_model(model_name, test_img_path, submit_path)

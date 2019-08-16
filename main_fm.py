@@ -4,10 +4,10 @@ from torch.utils import data
 from torch import nn
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
-from dataset.dataset import custom_dataset, valid_dataset
+from dataset.dataset import custom_dataset, valid_dataset, IC13_dataset
 # from model_resnet import EAST  # resnet
-from models.model import EAST #vgg16
-from loss import Loss
+from models.model_fm_cls import EAST #vgg16
+from loss import Loss, DiceLoss
 from utils.logger_util import Logger
 from utils.utils import AverageMeter, get_learning_rate
 import os
@@ -57,7 +57,7 @@ log.open(os.path.join(log_folder, 'log_train.txt'), mode='a')
 log.write("\n----------------------------------------------- [START %s] %s\n\n" % (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), '-' * 51))
 
 
-
+m = torch.nn.Sigmoid().to(device)
 
 def train(source_train_loader, target_train_loader, model, criterion, loss_domain, optimizer, epoch):
     epoch_loss = AverageMeter()
@@ -86,13 +86,13 @@ def train(source_train_loader, target_train_loader, model, criterion, loss_domai
         pred_score, pred_geo, pred_cls = model(s_img, False)
 
         # source label
-        domain_s = Variable(torch.zeros(pred_cls.size(0)).long().cuda())
-        loss_domain_s = loss_domain(pred_cls, domain_s)
+        domain_s = Variable(torch.zeros(pred_cls.size()).float().cuda())
+        loss_domain_s = loss_domain(m(pred_cls), domain_s)
 
         target_cls = model(t_img, True)
         # target label
-        domain_t = Variable(torch.ones(pred_cls.size(0)).long().cuda())
-        loss_domain_t = loss_domain(target_cls, domain_t)
+        domain_t = Variable(torch.ones(pred_cls.size()).float().cuda())
+        loss_domain_t = loss_domain(m(target_cls), domain_t)
 
         east_loss = criterion(s_gt_score, pred_score, s_gt_geo, pred_geo, s_ignored_map)
         loss = east_loss + 0.1*loss_domain_s + 0.1*loss_domain_t
@@ -129,6 +129,7 @@ def train(source_train_loader, target_train_loader, model, criterion, loss_domai
     log.write('Epoch[{}], Train, epoch_loss is {:.8f}, epoch_time is {:.8f}'.format(epoch, epoch_loss.avg,
                                                                             time.time() - epoch_time))
     log.write("\n")
+    return epoch_loss.avg
 
 
 def eval(model, val_dataloader, criterion, loss_domain, epoch):
@@ -149,8 +150,8 @@ def eval(model, val_dataloader, criterion, loss_domain, epoch):
             east_loss = criterion(gt_score, pred_score, gt_geo, pred_geo, ignored_map)
 
             # domain label
-            domain_t = Variable(torch.ones(pred_cls.size(0)).long().cuda())
-            loss_domain_t = loss_domain(pred_cls, domain_t)
+            domain_t = Variable(torch.ones(pred_cls.size()).float().cuda())
+            loss_domain_t = loss_domain(m(pred_cls), domain_t)
 
 
             loss = east_loss+0.1*loss_domain_t
@@ -177,8 +178,9 @@ def eval(model, val_dataloader, criterion, loss_domain, epoch):
 
 def main(args):
     source_train_set = custom_dataset(args.train_data_path, args.train_gt_path)
-    target_train_set = custom_dataset(args.target_data_path, args.target_gt_path)
-    valid_train_set = valid_dataset(args.val_data_path, args.val_gt_path)
+    # target_train_set = custom_dataset(args.target_data_path, args.target_gt_path)
+    target_train_set = IC13_dataset(args.target_data_path, args.target_gt_path)
+    valid_train_set = valid_dataset(args.val_data_path, args.val_gt_path, data_flag='ic13')
 
     source_train_loader = data.DataLoader(source_train_set, batch_size=args.batch_size,
                                           shuffle=True, num_workers=args.num_workers, drop_last=True)
@@ -189,8 +191,8 @@ def main(args):
 
     criterion = Loss().to(device)
     # domain loss
-    loss_domain = torch.nn.CrossEntropyLoss().to(device)
-
+    # loss_domain = torch.nn.CrossEntropyLoss().to(device)
+    loss_domain = torch.nn.BCELoss().to(device)
     best_loss = 1000
     best_num = 0
 
@@ -214,8 +216,8 @@ def main(args):
 
     total_epoch = args.epochs
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    # scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[total_epoch // 3, total_epoch * 2 // 3], gamma=0.1)
-    scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=6, threshold=args.lr/100)
+    scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[total_epoch // 3, total_epoch * 2 // 3], gamma=0.1)
+    # scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=12, threshold=args.lr/100)
     current_epoch_num = 0
 
     # resume
@@ -226,14 +228,14 @@ def main(args):
 
     for epoch in range(current_epoch_num, total_epoch):
         each_epoch_start = time.time()
-        # scheduler.step(epoch)
+        scheduler.step(epoch)
         # add lr in tensorboardX
         writer.add_scalar('epoch/lr',get_learning_rate(optimizer) ,epoch)
 
-        train(source_train_loader, target_train_loader, model, criterion, loss_domain, optimizer, epoch)
+        train_loss = train(source_train_loader, target_train_loader, model, criterion, loss_domain, optimizer, epoch)
 
         val_loss = eval(model,  valid_loader, criterion, loss_domain, epoch)
-        scheduler.step(val_loss)
+        # scheduler.step(train_loss)
 
         if val_loss < best_loss:
             best_num = epoch + 1

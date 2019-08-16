@@ -3,13 +3,12 @@ from torch.utils import data
 from torch import nn
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
-from dataset import custom_dataset, valid_dataset, IC13_dataset
+from dataset import custom_dataset, valid_dataset
 # from model_resnet import EAST  # resnet
-from model import EAST #vgg16
+from models.model import EAST #vgg16
 from loss import Loss
 import os
 import time
-import numpy as np
 import copy
 import matplotlib as mpl
 mpl.use('Agg')
